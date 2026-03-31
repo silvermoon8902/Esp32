@@ -1,0 +1,5 @@
+node_modules/
+backend/data/
+backend/mosquitto/data/
+backend/mosquitto/log/
+*.db

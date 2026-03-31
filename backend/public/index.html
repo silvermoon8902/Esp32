@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MyKinGuard — Live Presence Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      /* MyKinGuard Brand Colors */
+      --primary: #0A2540;
+      --emerald: #1DBF73;
+      --accent: #00E0A4;
+      --alert: #FF7A00;
+      --bg: #060d18;
+      --surface: #0c1929;
+      --surface2: #122236;
+      --border: #1a3350;
+      --text: #e8ecf1;
+      --text-dim: #6b8299;
+      --green: #1DBF73;
+      --green-glow: rgba(29, 191, 115, 0.15);
+      --red: #ef4444;
+      --red-glow: rgba(239, 68, 68, 0.15);
+      --orange: #FF7A00;
+      --blue: #00E0A4;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* Header */
+    .header {
+      background: linear-gradient(135deg, var(--primary) 0%, #0d2f4f 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--emerald), var(--accent));
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: 700;
+      color: white;
+    }
+    .header h1 {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .header h1 span {
+      color: var(--emerald);
+    }
+    .header-subtitle {
+      font-size: 12px;
+      color: var(--text-dim);
+      font-weight: 400;
+    }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .status-badge {
+      padding: 5px 14px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .status-badge::before {
+      content: '';
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+    }
+    .status-connected {
+      background: var(--green-glow);
+      color: var(--green);
+      border: 1px solid rgba(29, 191, 115, 0.3);
+    }
+    .status-connected::before { background: var(--green); }
+    .status-disconnected {
+      background: var(--red-glow);
+      color: var(--red);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    .status-disconnected::before { background: var(--red); }
+    .gateway-badge {
+      padding: 5px 14px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .gateway-online {
+      background: var(--green-glow);
+      color: var(--green);
+      border: 1px solid rgba(29, 191, 115, 0.3);
+    }
+    .gateway-offline {
+      background: rgba(107, 130, 153, 0.15);
+      color: var(--text-dim);
+      border: 1px solid rgba(107, 130, 153, 0.3);
+    }
+
+    /* Stats Row */
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+      padding: 20px 24px;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+    }
+    .stat-card::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+    }
+    .stat-card.green::after { background: linear-gradient(90deg, var(--emerald), var(--accent)); }
+    .stat-card.red::after { background: var(--red); }
+    .stat-card.blue::after { background: var(--accent); }
+    .stat-card.orange::after { background: var(--orange); }
+    .stat-card .label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+    .stat-card .value {
+      font-size: 32px;
+      font-weight: 700;
+    }
+    .stat-card .value.green { color: var(--emerald); }
+    .stat-card .value.red { color: var(--red); }
+    .stat-card .value.blue { color: var(--accent); }
+    .stat-card .value.orange { color: var(--orange); }
+
+    /* Main Layout */
+    .main {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      padding: 0 24px 24px;
+    }
+    @media (max-width: 900px) {
+      .main { grid-template-columns: 1fr; }
+    }
+
+    /* Panels */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .panel-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .panel-body {
+      padding: 0;
+      max-height: 500px;
+      overflow-y: auto;
+    }
+    .panel-body::-webkit-scrollbar { width: 6px; }
+    .panel-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* Device List */
+    .device-row {
+      display: flex;
+      align-items: center;
+      padding: 14px 20px;
+      border-bottom: 1px solid rgba(26, 51, 80, 0.3);
+      transition: background 0.2s;
+    }
+    .device-row:hover { background: var(--surface2); }
+    .device-indicator {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 14px;
+      flex-shrink: 0;
+    }
+    .device-indicator.present {
+      background: var(--emerald);
+      box-shadow: 0 0 10px rgba(29, 191, 115, 0.5);
+      animation: pulse 2s infinite;
+    }
+    .device-indicator.absent {
+      background: var(--red);
+      box-shadow: 0 0 6px rgba(239, 68, 68, 0.3);
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 6px rgba(29, 191, 115, 0.3); }
+      50% { box-shadow: 0 0 14px rgba(29, 191, 115, 0.6); }
+    }
+    .device-info { flex: 1; }
+    .device-name { font-weight: 600; font-size: 14px; }
+    .device-role {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-left: 8px;
+    }
+    .device-role.student {
+      background: rgba(0, 224, 164, 0.15);
+      color: var(--accent);
+    }
+    .device-role.staff {
+      background: rgba(255, 122, 0, 0.15);
+      color: var(--orange);
+    }
+    .device-mac {
+      font-size: 11px;
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .device-meta { text-align: right; }
+    .device-rssi { font-size: 13px; font-weight: 600; }
+    .device-rssi.strong { color: var(--emerald); }
+    .device-rssi.medium { color: var(--orange); }
+    .device-rssi.weak { color: var(--red); }
+    .device-distance {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .device-time {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    /* RSSI bar */
+    .rssi-bar {
+      width: 60px;
+      height: 5px;
+      background: rgba(255,255,255,0.06);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-top: 4px;
+    }
+    .rssi-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.5s ease;
+    }
+
+    /* Event Log */
+    .event-row {
+      display: flex;
+      align-items: center;
+      padding: 10px 20px;
+      border-bottom: 1px solid rgba(26, 51, 80, 0.3);
+      font-size: 13px;
+    }
+    .event-badge {
+      padding: 3px 10px;
+      border-radius: 5px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      margin-right: 12px;
+      min-width: 54px;
+      text-align: center;
+      letter-spacing: 0.03em;
+    }
+    .event-badge.enter {
+      background: var(--green-glow);
+      color: var(--emerald);
+    }
+    .event-badge.exit {
+      background: var(--red-glow);
+      color: var(--red);
+    }
+    .event-text { flex: 1; }
+    .event-time {
+      font-size: 11px;
+      color: var(--text-dim);
+      font-family: monospace;
+    }
+
+    /* Beacon Registration */
+    .register-form {
+      padding: 14px 20px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      border-bottom: 1px solid var(--border);
+      background: rgba(0, 0, 0, 0.15);
+    }
+    .register-form input, .register-form select {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-family: 'Inter', sans-serif;
+    }
+    .register-form input:focus, .register-form select:focus {
+      outline: none;
+      border-color: var(--emerald);
+      box-shadow: 0 0 0 2px rgba(29, 191, 115, 0.15);
+    }
+    .register-form button {
+      background: linear-gradient(135deg, var(--emerald), var(--accent));
+      color: white;
+      border: none;
+      padding: 8px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .register-form button:hover { opacity: 0.85; }
+
+    /* Empty state */
+    .empty {
+      padding: 40px 20px;
+      text-align: center;
+      color: var(--text-dim);
+      font-size: 14px;
+    }
+    .empty .icon { font-size: 32px; margin-bottom: 12px; opacity: 0.5; }
+
+    /* Gateway status panel */
+    .gateway-info {
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .gateway-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--text-dim);
+      flex-shrink: 0;
+    }
+    .gateway-dot.online {
+      background: var(--emerald);
+      box-shadow: 0 0 8px rgba(29, 191, 115, 0.5);
+    }
+
+    /* Flash animation */
+    .flash-enter {
+      animation: flashGreen 0.6s ease;
+    }
+    .flash-exit {
+      animation: flashRed 0.6s ease;
+    }
+    @keyframes flashGreen {
+      0% { background: rgba(29, 191, 115, 0.08); }
+      100% { background: transparent; }
+    }
+    @keyframes flashRed {
+      0% { background: rgba(239, 68, 68, 0.08); }
+      100% { background: transparent; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <div class="logo-icon">M</div>
+      <div>
+        <h1>My<span>Kin</span>Guard</h1>
+        <div class="header-subtitle">M0 Pilot — Live Presence Dashboard</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <span id="gatewayBadge" class="gateway-badge gateway-offline">Gateway: Waiting</span>
+      <span id="wsStatus" class="status-badge status-disconnected">Disconnected</span>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat-card blue">
+      <div class="label">Total Detected</div>
+      <div class="value blue" id="statTotal">0</div>
+    </div>
+    <div class="stat-card green">
+      <div class="label">Present Now</div>
+      <div class="value green" id="statPresent">0</div>
+    </div>
+    <div class="stat-card red">
+      <div class="label">Absent</div>
+      <div class="value red" id="statAbsent">0</div>
+    </div>
+    <div class="stat-card orange">
+      <div class="label">Last Detection</div>
+      <div class="value orange" id="statLastScan" style="font-size:16px">—</div>
+    </div>
+  </div>
+
+  <!-- Main Panels -->
+  <div class="main">
+
+    <!-- Devices Panel -->
+    <div class="panel" style="grid-row: span 2">
+      <div class="panel-header">
+        Detected Beacons
+        <span id="deviceCount" style="color:var(--text-dim)">0</span>
+      </div>
+      <div class="register-form">
+        <input id="regMac" type="text" placeholder="MAC (AA:BB:CC:DD:EE:FF)" style="width:170px">
+        <input id="regName" type="text" placeholder="Name (e.g., Sofia)">
+        <select id="regRole">
+          <option value="student">Student</option>
+          <option value="staff">Staff</option>
+        </select>
+        <button onclick="registerBeacon()">+ Register</button>
+      </div>
+      <div class="panel-body" id="deviceList">
+        <div class="empty">
+          <div class="icon">📡</div>
+          Waiting for BLE beacon data from Theengs Bridge...
+        </div>
+      </div>
+    </div>
+
+    <!-- Event Log Panel -->
+    <div class="panel">
+      <div class="panel-header">
+        Event Log
+        <span id="eventCount" style="color:var(--text-dim)">0 events</span>
+      </div>
+      <div class="panel-body" id="eventLog">
+        <div class="empty">
+          <div class="icon">📋</div>
+          No presence events yet
+        </div>
+      </div>
+    </div>
+
+    <!-- Gateway Status Panel -->
+    <div class="panel">
+      <div class="panel-header">Theengs Bridge Status</div>
+      <div class="panel-body" id="gatewayPanel">
+        <div class="gateway-info">
+          <div class="gateway-dot" id="gatewayDot"></div>
+          <div>
+            <div style="font-weight:600;font-size:14px">Theengs Bridge (ESP32)</div>
+            <div style="font-size:12px;color:var(--text-dim)" id="gatewayInfo">Waiting for gateway connection...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ============================================================
+    // MyKinGuard Dashboard — WebSocket Client
+    // ============================================================
+
+    const API_BASE = window.location.origin;
+    const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
+
+    let ws;
+    let devices = [];
+    let events = [];
+    let registeredBeacons = {};
+    let reconnectTimeout = 1000;
+
+    // --- WebSocket ---
+    function connectWS() {
+      ws = new WebSocket(WS_URL);
+
+      ws.onopen = () => {
+        document.getElementById('wsStatus').className = 'status-badge status-connected';
+        document.getElementById('wsStatus').textContent = 'Live';
+        reconnectTimeout = 1000;
+      };
+
+      ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+
+        switch (msg.type) {
+          case 'snapshot':
+            devices = msg.data;
+            renderDevices();
+            updateStats();
+            break;
+
+          case 'presence_event':
+            events.unshift(msg.data);
+            if (events.length > 100) events.pop();
+            renderEvents();
+            // Flash the body
+            document.body.classList.add(msg.data.event === 'enter' ? 'flash-enter' : 'flash-exit');
+            setTimeout(() => {
+              document.body.classList.remove('flash-enter', 'flash-exit');
+            }, 600);
+            break;
+
+          case 'scan':
+            document.getElementById('statLastScan').textContent = formatTime(msg.data.timestamp);
+            break;
+
+          case 'gateway_status':
+            updateGatewayStatus(msg.data);
+            break;
+        }
+      };
+
+      ws.onclose = () => {
+        document.getElementById('wsStatus').className = 'status-badge status-disconnected';
+        document.getElementById('wsStatus').textContent = 'Disconnected';
+        setTimeout(connectWS, reconnectTimeout);
+        reconnectTimeout = Math.min(reconnectTimeout * 2, 30000);
+      };
+    }
+
+    // --- Render Devices ---
+    function renderDevices() {
+      const container = document.getElementById('deviceList');
+      if (!devices.length) {
+        container.innerHTML = '<div class="empty"><div class="icon">📡</div>Waiting for BLE beacon data from Theengs Bridge...</div>';
+        document.getElementById('deviceCount').textContent = '0';
+        return;
+      }
+
+      document.getElementById('deviceCount').textContent = devices.length;
+
+      container.innerHTML = devices.map(d => {
+        const displayName = registeredBeacons[d.mac] || registeredBeacons[d.uuid] || d.name || d.mac;
+        const role = d.role || 'unknown';
+        const rssiClass = d.rssi > -60 ? 'strong' : d.rssi > -75 ? 'medium' : 'weak';
+        const rssiPct = Math.min(100, Math.max(0, (d.rssi + 100) * 2.5));
+        const rssiColor = d.rssi > -60 ? 'var(--emerald)' : d.rssi > -75 ? 'var(--orange)' : 'var(--red)';
+        const distanceText = d.distance ? `~${d.distance.toFixed(1)}m` : '';
+
+        return `
+          <div class="device-row">
+            <div class="device-indicator ${d.present ? 'present' : 'absent'}"></div>
+            <div class="device-info">
+              <div>
+                <span class="device-name">${escapeHtml(displayName)}</span>
+                ${role !== 'unknown' ? `<span class="device-role ${role}">${role}</span>` : ''}
+              </div>
+              <div class="device-mac">${d.mac}${d.model && d.model !== 'unknown' ? ' · ' + d.model : ''}</div>
+            </div>
+            <div class="device-meta">
+              <div class="device-rssi ${rssiClass}">${d.rssi} dBm</div>
+              <div class="rssi-bar">
+                <div class="rssi-bar-fill" style="width:${rssiPct}%;background:${rssiColor}"></div>
+              </div>
+              <div class="device-distance">${distanceText}</div>
+              <div class="device-time">${d.present ? '● Now' : formatTime(d.lastSeen)}</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // --- Render Events ---
+    function renderEvents() {
+      const container = document.getElementById('eventLog');
+      if (!events.length) {
+        container.innerHTML = '<div class="empty"><div class="icon">📋</div>No presence events yet</div>';
+        document.getElementById('eventCount').textContent = '0 events';
+        return;
+      }
+
+      document.getElementById('eventCount').textContent = events.length + ' events';
+
+      container.innerHTML = events.map(e => {
+        const displayName = registeredBeacons[e.mac] || registeredBeacons[e.uuid] || e.name || e.mac;
+        return `
+          <div class="event-row">
+            <span class="event-badge ${e.event}">${e.event}</span>
+            <span class="event-text">
+              <strong>${escapeHtml(displayName)}</strong>
+              ${e.role ? `<span class="device-role ${e.role}" style="margin-left:4px">${e.role}</span>` : ''}
+            </span>
+            <span class="event-time">${formatTime(e.timestamp)}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // --- Update Stats ---
+    function updateStats() {
+      const present = devices.filter(d => d.present).length;
+      const absent = devices.filter(d => !d.present).length;
+      document.getElementById('statTotal').textContent = devices.length;
+      document.getElementById('statPresent').textContent = present;
+      document.getElementById('statAbsent').textContent = absent;
+    }
+
+    // --- Gateway Status ---
+    function updateGatewayStatus(data) {
+      const dot = document.getElementById('gatewayDot');
+      const info = document.getElementById('gatewayInfo');
+      const badge = document.getElementById('gatewayBadge');
+
+      if (data.connected) {
+        dot.className = 'gateway-dot online';
+        badge.className = 'gateway-badge gateway-online';
+        badge.textContent = 'Gateway: Online';
+        const parts = [];
+        if (data.ip) parts.push(`IP: ${data.ip}`);
+        if (data.rssi) parts.push(`WiFi: ${data.rssi} dBm`);
+        if (data.freemem) parts.push(`Mem: ${(data.freemem / 1024).toFixed(0)}KB`);
+        if (data.uptime) parts.push(`Up: ${formatUptime(data.uptime)}`);
+        info.textContent = parts.length > 0 ? parts.join(' · ') : `Last seen: ${formatTime(data.lastSeen)}`;
+      } else {
+        dot.className = 'gateway-dot';
+        badge.className = 'gateway-badge gateway-offline';
+        badge.textContent = 'Gateway: Offline';
+        info.textContent = data.lastSeen ? `Last seen: ${formatTime(data.lastSeen)}` : 'Waiting for gateway connection...';
+      }
+    }
+
+    // --- Register Beacon ---
+    async function registerBeacon() {
+      const mac = document.getElementById('regMac').value.trim().toLowerCase();
+      const name = document.getElementById('regName').value.trim();
+      const role = document.getElementById('regRole').value;
+
+      if (!mac || !name) return alert('MAC and Name are required');
+
+      const res = await fetch(`${API_BASE}/api/beacons`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mac, name, role })
+      });
+
+      if (res.ok) {
+        registeredBeacons[mac] = name;
+        document.getElementById('regMac').value = '';
+        document.getElementById('regName').value = '';
+        renderDevices();
+        renderEvents();
+      }
+    }
+
+    // Load registered beacons on startup
+    async function loadBeacons() {
+      try {
+        const res = await fetch(`${API_BASE}/api/beacons`);
+        const data = await res.json();
+        for (const b of data) {
+          if (b.mac) registeredBeacons[b.mac] = b.name;
+          if (b.uuid) registeredBeacons[b.uuid] = b.name;
+        }
+      } catch (e) {}
+    }
+
+    // Load initial events
+    async function loadEvents() {
+      try {
+        const res = await fetch(`${API_BASE}/api/events?limit=50`);
+        events = await res.json();
+        renderEvents();
+      } catch (e) {}
+    }
+
+    // --- Helpers ---
+    function formatTime(isoStr) {
+      if (!isoStr) return '—';
+      const d = new Date(isoStr);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function formatUptime(s) {
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    }
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    // --- Init ---
+    loadBeacons();
+    loadEvents();
+    connectWS();
+  </script>
+</body>
+</html>
