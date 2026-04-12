@@ -90,10 +90,10 @@ mqttClient.on('connect', () => {
   console.log('[MQTT] Connected!');
 
   // Subscribe to Theengs Bridge / OpenMQTTGateway topics
-  // BTtoMQTT/+ captures all BLE device messages
-  const btTopic = `${MQTT_BASE_TOPIC}${GATEWAY_NAME}/BTtoMQTT/+`;
-  const sysTopic = `${MQTT_BASE_TOPIC}${GATEWAY_NAME}/SYStoMQTT/+`;
-  const lwTopic = `${MQTT_BASE_TOPIC}${GATEWAY_NAME}/LWT`;
+  // Use wildcard '+' for gateway name to accept any name (OpenMQTTGateway, TheengsBridge, etc.)
+  const btTopic = `${MQTT_BASE_TOPIC}+/BTtoMQTT/+`;
+  const sysTopic = `${MQTT_BASE_TOPIC}+/SYStoMQTT/+`;
+  const lwTopic = `${MQTT_BASE_TOPIC}+/LWT`;
 
   mqttClient.subscribe(btTopic, (err) => {
     if (!err) console.log(`[MQTT] Subscribed to: ${btTopic}`);
