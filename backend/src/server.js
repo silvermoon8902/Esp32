@@ -46,6 +46,10 @@ wss.on('connection', (ws) => {
     type: 'snapshot',
     data: getPresenceSnapshot()
   }));
+  ws.send(JSON.stringify({
+    type: 'gateway_status',
+    data: { connected: gatewayStatus.connected, lastSeen: gatewayStatus.lastSeen }
+  }));
 
   ws.on('close', () => {
     wsClients.delete(ws);
@@ -140,8 +144,17 @@ mqttClient.on('message', (topic, message) => {
       const topicParts = topic.split('/');
       const topicDeviceId = topicParts[topicParts.length - 1];
 
+      const wasConnected = gatewayStatus.connected;
       gatewayStatus.lastSeen = new Date().toISOString();
       gatewayStatus.connected = true;
+
+      // Broadcast gateway online status if this is the first detection
+      if (!wasConnected) {
+        broadcast({
+          type: 'gateway_status',
+          data: { connected: true, lastSeen: gatewayStatus.lastSeen }
+        });
+      }
 
       processTheengsMessage(topicDeviceId, data);
 
