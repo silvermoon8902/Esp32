@@ -292,7 +292,7 @@ app.get('/api/config', (req, res) => {
     STRONG_ENTER_RSSI: process.env.STRONG_ENTER_RSSI || '-68',
     EXIT_RSSI: process.env.EXIT_RSSI || '-82',
     IGNORE_RSSI: process.env.IGNORE_RSSI || '-85',
-    EXIT_TIMEOUT_MS: process.env.EXIT_TIMEOUT_MS || '90000',
+    EXIT_TIMEOUT_MS: process.env.EXIT_TIMEOUT_MS || '180000',
     ENTER_WINDOW_MS: process.env.ENTER_WINDOW_MS || '8000',
     ENTER_MIN_HITS: process.env.ENTER_MIN_HITS || '2',
     SMOOTHING_FACTOR: process.env.SMOOTHING_FACTOR || '0.4'
