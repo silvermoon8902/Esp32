@@ -1,26 +1,13 @@
 // ============================================================
-// MyKinGuard — Presence Detection Engine v2
+// MyKinGuard — Presence Detection Engine v2.1
 // ============================================================
 //
-// Robust presence detection with:
-// - RSSI smoothing (exponential moving average)
-// - Hysteresis thresholds (separate enter/exit RSSI)
-// - Multi-reading ENTER confirmation
-// - Timeout-based EXIT
-// - Registered-only presence events (raw detections stored separately)
-//
-// Theengs iBeacon payload format:
-// {
-//   "id": "AA:BB:CC:DD:EE:FF",
-//   "rssi": -65,
-//   "brand": "GENERIC",
-//   "model": "iBeacon",
-//   "model_id": "IBEACON",
-//   "uuid": "1de4b189115e45f6b44e509352269977",
-//   "major": 0, "minor": 0,
-//   "txpower": -66,
-//   "distance": 3.5
-// }
+// Fixes from real-world testing:
+// - Increased EXIT_TIMEOUT to 90s (Theengs Bridge scan gaps)
+// - MAC normalization (strip spaces, ensure colons)
+// - Lookup by both MAC and UUID for flexible registration
+// - Discovery mode: track ALL recent devices for registration UI
+// - Null RSSI handling
 // ============================================================
 
 const { getDb } = require('./database');
@@ -30,20 +17,33 @@ const ENTER_RSSI        = parseInt(process.env.ENTER_RSSI || '-75');
 const STRONG_ENTER_RSSI = parseInt(process.env.STRONG_ENTER_RSSI || '-68');
 const EXIT_RSSI         = parseInt(process.env.EXIT_RSSI || '-82');
 const IGNORE_RSSI       = parseInt(process.env.IGNORE_RSSI || '-85');
-const EXIT_TIMEOUT_MS   = parseInt(process.env.EXIT_TIMEOUT_MS || '20000');
+const EXIT_TIMEOUT_MS   = parseInt(process.env.EXIT_TIMEOUT_MS || '90000');
 const ENTER_WINDOW_MS   = parseInt(process.env.ENTER_WINDOW_MS || '8000');
 const ENTER_MIN_HITS    = parseInt(process.env.ENTER_MIN_HITS || '2');
 const SMOOTHING_FACTOR  = parseFloat(process.env.SMOOTHING_FACTOR || '0.4');
 
 // In-memory state
-// deviceKey -> { smoothedRssi, recentHits: [{ts, rssi}], present, lastSeen, ... }
 const presenceState = new Map();
+
+// Discovery: track ALL recently seen devices (for registration UI)
+// mac -> { lastSeen, rssi, uuid, model, count }
+const discoveryState = new Map();
+const DISCOVERY_TTL_MS = 300000; // 5 minutes
 
 // Callback for presence change events
 let onPresenceChange = null;
 
 function setPresenceCallback(cb) {
   onPresenceChange = cb;
+}
+
+// --- MAC normalization ---
+function normalizeMac(raw) {
+  if (!raw) return '';
+  // Strip all non-hex characters, lowercase, then format as xx:xx:xx:xx:xx:xx
+  const hex = raw.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+  if (hex.length !== 12) return hex; // return as-is if not valid MAC length
+  return hex.match(/.{2}/g).join(':');
 }
 
 // --- Registered beacons cache ---
@@ -58,29 +58,46 @@ function getRegisteredBeacons() {
   const rows = db.prepare('SELECT * FROM beacons').all();
   beaconCache = new Map();
   for (const b of rows) {
-    if (b.mac) beaconCache.set(`mac:${b.mac.toLowerCase()}`, b);
-    if (b.uuid) beaconCache.set(`uuid:${b.uuid}:${b.major || 0}:${b.minor || 0}`, b);
+    if (b.mac) {
+      const normalizedMac = normalizeMac(b.mac);
+      beaconCache.set(`mac:${normalizedMac}`, b);
+    }
+    if (b.uuid) {
+      beaconCache.set(`uuid:${b.uuid.toLowerCase()}:${b.major || 0}:${b.minor || 0}`, b);
+    }
   }
   beaconCacheTime = now;
   return beaconCache;
 }
 
-function isRegistered(deviceKey) {
-  return getRegisteredBeacons().has(deviceKey);
-}
+/**
+ * Look up registered beacon by trying multiple key strategies
+ */
+function lookupRegistered(mac, data) {
+  const beacons = getRegisteredBeacons();
 
-function lookupRegistered(deviceKey) {
-  return getRegisteredBeacons().get(deviceKey) || null;
+  // Try UUID key first (most specific for iBeacon)
+  if (data.uuid) {
+    const uuidKey = `uuid:${data.uuid.toLowerCase()}:${data.major || 0}:${data.minor || 0}`;
+    const byUuid = beacons.get(uuidKey);
+    if (byUuid) return { beacon: byUuid, key: uuidKey };
+  }
+
+  // Try normalized MAC
+  const macKey = `mac:${mac}`;
+  const byMac = beacons.get(macKey);
+  if (byMac) return { beacon: byMac, key: macKey };
+
+  return null;
 }
 
 /**
- * Get a unique key for a device.
+ * Get device key — prefer UUID for iBeacon, fall back to MAC
  */
-function getDeviceKey(data) {
+function getDeviceKey(mac, data) {
   if (data.uuid) {
-    return `uuid:${data.uuid}:${data.major || 0}:${data.minor || 0}`;
+    return `uuid:${data.uuid.toLowerCase()}:${data.major || 0}:${data.minor || 0}`;
   }
-  const mac = (data.id || data.mac || '').toLowerCase();
   return `mac:${mac}`;
 }
 
@@ -88,7 +105,8 @@ function getDeviceKey(data) {
  * Smooth RSSI using exponential moving average
  */
 function smoothRssi(previous, current) {
-  if (previous === null || previous === undefined) return current;
+  if (previous === null || previous === undefined || isNaN(previous)) return current;
+  if (current === null || current === undefined || isNaN(current)) return previous;
   return (1 - SMOOTHING_FACTOR) * previous + SMOOTHING_FACTOR * current;
 }
 
@@ -96,32 +114,53 @@ function smoothRssi(previous, current) {
  * Process a single BLE device message from Theengs Bridge
  */
 function processTheengsMessage(topicDeviceId, data) {
-  const mac = (data.id || topicDeviceId || '').toLowerCase();
-  const rawRssi = data.rssi;
+  const mac = normalizeMac(data.id || topicDeviceId || '');
+  const rawRssi = typeof data.rssi === 'number' ? data.rssi : null;
 
-  // Hard ignore: signal too weak to be meaningful
-  if (rawRssi !== undefined && rawRssi !== null && rawRssi < IGNORE_RSSI) return;
+  // Hard ignore: no RSSI or too weak
+  if (rawRssi === null || rawRssi < IGNORE_RSSI) return;
 
-  const deviceKey = getDeviceKey(data);
   const now = Date.now();
   const nowDate = new Date(now);
   const db = getDb();
 
-  // --- Raw layer: store ALL detections (technical log) ---
-  db.prepare(`
-    INSERT INTO scan_events (gateway, mac, uuid, major, minor, rssi, txpower, distance, model, raw_data)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    'theengs-bridge', mac,
-    data.uuid || null, data.major || null, data.minor || null,
-    rawRssi || null, data.txpower || null, data.distance || null,
-    data.model_id || data.model || 'unknown',
-    JSON.stringify(data)
-  );
+  // --- Discovery layer: track ALL devices ---
+  const discoveryKey = mac;
+  const prevDiscovery = discoveryState.get(discoveryKey);
+  discoveryState.set(discoveryKey, {
+    mac,
+    uuid: data.uuid || (prevDiscovery ? prevDiscovery.uuid : ''),
+    major: data.major || 0,
+    minor: data.minor || 0,
+    rssi: rawRssi,
+    model: data.model_id || data.model || 'unknown',
+    brand: data.brand || '',
+    lastSeen: now,
+    count: (prevDiscovery ? prevDiscovery.count : 0) + 1
+  });
+
+  // --- Raw layer: store scan (throttled — max 1 per device per 10s) ---
+  const scanKey = `scan:${mac}`;
+  const lastScanWrite = discoveryState.get(scanKey);
+  if (!lastScanWrite || (now - lastScanWrite) > 10000) {
+    discoveryState.set(scanKey, now);
+    db.prepare(`
+      INSERT INTO scan_events (gateway, mac, uuid, major, minor, rssi, txpower, distance, model, raw_data)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'theengs-bridge', mac,
+      data.uuid || null, data.major || null, data.minor || null,
+      rawRssi, data.txpower || null, data.distance || null,
+      data.model_id || data.model || 'unknown',
+      JSON.stringify(data)
+    );
+  }
 
   // --- Presence layer: only for registered beacons ---
-  const registered = lookupRegistered(deviceKey);
-  if (!registered) return; // Ignore unregistered devices for presence logic
+  const match = lookupRegistered(mac, data);
+  if (!match) return;
+
+  const { beacon: registered, key: deviceKey } = match;
 
   // Get or create state
   let state = presenceState.get(deviceKey);
@@ -141,6 +180,7 @@ function processTheengsMessage(topicDeviceId, data) {
       brand: data.brand || '',
       present: false,
       lastSeen: now,
+      lastValidSignal: now,
       recentHits: [],
       deviceKey
     };
@@ -154,12 +194,12 @@ function processTheengsMessage(topicDeviceId, data) {
   state.distance = data.distance || state.distance;
   state.name = registered.name;
   state.role = registered.role;
+  if (data.uuid) state.uuid = data.uuid;
 
-  // Track recent valid hits (RSSI above enter threshold) within the window
+  // Track recent valid hits within the enter window
   if (state.smoothedRssi >= ENTER_RSSI) {
     state.recentHits.push({ ts: now, rssi: state.smoothedRssi });
   }
-  // Prune hits outside the enter window
   state.recentHits = state.recentHits.filter(h => (now - h.ts) <= ENTER_WINDOW_MS);
 
   // --- ENTER logic ---
@@ -179,6 +219,7 @@ function processTheengsMessage(topicDeviceId, data) {
     if (shouldEnter) {
       state.present = true;
       state.recentHits = [];
+      state.lastValidSignal = now;
 
       db.prepare(
         'INSERT INTO presence_events (mac, uuid, event, rssi, distance) VALUES (?, ?, ?, ?, ?)'
@@ -200,10 +241,7 @@ function processTheengsMessage(topicDeviceId, data) {
     }
   }
 
-  // --- While present: check hysteresis exit on weak signal ---
-  // (actual timeout exit is handled by checkAbsence)
-  // If smoothed RSSI drops below exit threshold, don't immediately exit
-  // but stop resetting the "last valid" timer — let the timeout handle it
+  // --- While present: update last valid signal time ---
   if (state.present && state.smoothedRssi >= EXIT_RSSI) {
     state.lastValidSignal = now;
   }
@@ -213,7 +251,7 @@ function processTheengsMessage(topicDeviceId, data) {
 
 /**
  * Check for devices that should exit.
- * Uses hysteresis: exit when no valid signal (above EXIT_RSSI) for EXIT_TIMEOUT_MS.
+ * Exit when no valid signal (above EXIT_RSSI) for EXIT_TIMEOUT_MS.
  */
 function checkAbsence() {
   const db = getDb();
@@ -249,6 +287,13 @@ function checkAbsence() {
       }
     }
   }
+
+  // Clean up old discovery entries
+  for (const [key, entry] of discoveryState.entries()) {
+    if (typeof entry === 'object' && entry.lastSeen && (now - entry.lastSeen) > DISCOVERY_TTL_MS) {
+      discoveryState.delete(key);
+    }
+  }
 }
 
 /**
@@ -278,9 +323,38 @@ function getPresenceSnapshot() {
   return result.sort((a, b) => (a.present === b.present ? 0 : a.present ? -1 : 1));
 }
 
+/**
+ * Get all recently discovered BLE devices (for registration)
+ */
+function getDiscoverySnapshot() {
+  const result = [];
+  const beacons = getRegisteredBeacons();
+  for (const [key, entry] of discoveryState.entries()) {
+    if (typeof entry !== 'object' || !entry.mac) continue;
+    // Check if already registered
+    const isReg = beacons.has(`mac:${entry.mac}`) ||
+      (entry.uuid && beacons.has(`uuid:${entry.uuid.toLowerCase()}:${entry.major || 0}:${entry.minor || 0}`));
+    result.push({
+      mac: entry.mac,
+      uuid: entry.uuid || '',
+      major: entry.major || 0,
+      minor: entry.minor || 0,
+      rssi: entry.rssi,
+      model: entry.model,
+      brand: entry.brand,
+      lastSeen: new Date(entry.lastSeen).toISOString(),
+      count: entry.count,
+      registered: isReg
+    });
+  }
+  return result.sort((a, b) => b.rssi - a.rssi); // strongest signal first
+}
+
 module.exports = {
   processTheengsMessage,
   checkAbsence,
   getPresenceSnapshot,
-  setPresenceCallback
+  getDiscoverySnapshot,
+  setPresenceCallback,
+  normalizeMac
 };

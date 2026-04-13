@@ -15,7 +15,7 @@ const { WebSocketServer } = require('ws');
 const mqtt = require('mqtt');
 const path = require('path');
 const { getDb } = require('./database');
-const { processTheengsMessage, checkAbsence, getPresenceSnapshot, setPresenceCallback } = require('./presence');
+const { processTheengsMessage, checkAbsence, getPresenceSnapshot, getDiscoverySnapshot, setPresenceCallback, normalizeMac } = require('./presence');
 
 // --- Config ---
 const PORT     = process.env.PORT || 3000;
@@ -216,14 +216,14 @@ app.get('/api/beacons', (req, res) => {
   res.json(beacons);
 });
 
-// Register a new beacon
+// Register a new beacon (MAC is normalized automatically)
 app.post('/api/beacons', (req, res) => {
   const { mac, uuid, major, minor, name, role } = req.body;
   if (!name) {
     return res.status(400).json({ error: 'name is required' });
   }
-  const identifier = mac ? mac.toLowerCase() : uuid || '';
-  if (!identifier) {
+  const normalizedMac = mac ? normalizeMac(mac) : '';
+  if (!normalizedMac && !uuid) {
     return res.status(400).json({ error: 'mac or uuid is required' });
   }
   const db = getDb();
@@ -231,14 +231,14 @@ app.post('/api/beacons', (req, res) => {
     db.prepare(
       'INSERT OR REPLACE INTO beacons (mac, uuid, major, minor, name, role) VALUES (?, ?, ?, ?, ?, ?)'
     ).run(
-      mac ? mac.toLowerCase() : '',
-      uuid || '',
+      normalizedMac,
+      uuid ? uuid.toLowerCase() : '',
       major || 0,
       minor || 0,
       name,
       role || 'student'
     );
-    res.json({ success: true });
+    res.json({ success: true, mac: normalizedMac });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -280,6 +280,11 @@ app.get('/api/scans/:id', (req, res) => {
   res.json(scans);
 });
 
+// Discovery: all recently detected BLE devices (for finding and registering beacons)
+app.get('/api/discovery', (req, res) => {
+  res.json(getDiscoverySnapshot());
+});
+
 // Presence engine configuration (read-only)
 app.get('/api/config', (req, res) => {
   res.json({
@@ -287,7 +292,7 @@ app.get('/api/config', (req, res) => {
     STRONG_ENTER_RSSI: process.env.STRONG_ENTER_RSSI || '-68',
     EXIT_RSSI: process.env.EXIT_RSSI || '-82',
     IGNORE_RSSI: process.env.IGNORE_RSSI || '-85',
-    EXIT_TIMEOUT_MS: process.env.EXIT_TIMEOUT_MS || '20000',
+    EXIT_TIMEOUT_MS: process.env.EXIT_TIMEOUT_MS || '90000',
     ENTER_WINDOW_MS: process.env.ENTER_WINDOW_MS || '8000',
     ENTER_MIN_HITS: process.env.ENTER_MIN_HITS || '2',
     SMOOTHING_FACTOR: process.env.SMOOTHING_FACTOR || '0.4'
