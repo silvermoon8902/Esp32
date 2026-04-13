@@ -3,3 +3,5 @@ backend/data/
 backend/mosquitto/data/
 backend/mosquitto/log/
 *.db
+vps_ssh.py
+deploy.py
