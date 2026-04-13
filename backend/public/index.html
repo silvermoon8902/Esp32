@@ -671,7 +671,7 @@
               <strong>${escapeHtml(displayName)}</strong>
               ${e.role ? `<span class="device-role ${e.role}" style="margin-left:4px">${e.role}</span>` : ''}
             </span>
-            <span class="event-time">${formatTime(e.timestamp)}</span>
+            <span class="event-time">${formatDateTime(e.timestamp)}</span>
           </div>
         `;
       }).join('');
@@ -762,6 +762,13 @@
       if (!isoStr) return '—';
       const d = new Date(isoStr);
       return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function formatDateTime(isoStr) {
+      if (!isoStr) return '—';
+      const d = new Date(isoStr);
+      return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
+             d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
 
     function formatUptime(s) {
