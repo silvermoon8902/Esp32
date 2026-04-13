@@ -1,10 +1,13 @@
 // ============================================================
-// MyKinGuard — Presence Detection Engine
+// MyKinGuard — Presence Detection Engine v2
 // ============================================================
 //
-// Processes Theengs Bridge / OpenMQTTGateway BLE messages.
-// Tracks which beacons are "present" vs "absent".
-// Generates enter/exit events.
+// Robust presence detection with:
+// - RSSI smoothing (exponential moving average)
+// - Hysteresis thresholds (separate enter/exit RSSI)
+// - Multi-reading ENTER confirmation
+// - Timeout-based EXIT
+// - Registered-only presence events (raw detections stored separately)
 //
 // Theengs iBeacon payload format:
 // {
@@ -14,8 +17,7 @@
 //   "model": "iBeacon",
 //   "model_id": "IBEACON",
 //   "uuid": "1de4b189115e45f6b44e509352269977",
-//   "major": 0,
-//   "minor": 0,
+//   "major": 0, "minor": 0,
 //   "txpower": -66,
 //   "distance": 3.5
 // }
@@ -23,14 +25,19 @@
 
 const { getDb } = require('./database');
 
-// In-memory presence state: deviceKey -> { lastSeen, rssi, present, ... }
+// --- Tunable parameters ---
+const ENTER_RSSI        = parseInt(process.env.ENTER_RSSI || '-75');
+const STRONG_ENTER_RSSI = parseInt(process.env.STRONG_ENTER_RSSI || '-68');
+const EXIT_RSSI         = parseInt(process.env.EXIT_RSSI || '-82');
+const IGNORE_RSSI       = parseInt(process.env.IGNORE_RSSI || '-85');
+const EXIT_TIMEOUT_MS   = parseInt(process.env.EXIT_TIMEOUT_MS || '20000');
+const ENTER_WINDOW_MS   = parseInt(process.env.ENTER_WINDOW_MS || '8000');
+const ENTER_MIN_HITS    = parseInt(process.env.ENTER_MIN_HITS || '2');
+const SMOOTHING_FACTOR  = parseFloat(process.env.SMOOTHING_FACTOR || '0.4');
+
+// In-memory state
+// deviceKey -> { smoothedRssi, recentHits: [{ts, rssi}], present, lastSeen, ... }
 const presenceState = new Map();
-
-// How many seconds without detection before marking "absent"
-const ABSENCE_TIMEOUT_SEC = parseInt(process.env.ABSENCE_TIMEOUT || '60');
-
-// Minimum RSSI to consider a detection valid (filter weak/distant signals)
-const MIN_RSSI = parseInt(process.env.MIN_RSSI || '-90');
 
 // Callback for presence change events
 let onPresenceChange = null;
@@ -39,9 +46,35 @@ function setPresenceCallback(cb) {
   onPresenceChange = cb;
 }
 
+// --- Registered beacons cache ---
+let beaconCache = null;
+let beaconCacheTime = 0;
+const CACHE_TTL_MS = 5000;
+
+function getRegisteredBeacons() {
+  const now = Date.now();
+  if (beaconCache && (now - beaconCacheTime) < CACHE_TTL_MS) return beaconCache;
+  const db = getDb();
+  const rows = db.prepare('SELECT * FROM beacons').all();
+  beaconCache = new Map();
+  for (const b of rows) {
+    if (b.mac) beaconCache.set(`mac:${b.mac.toLowerCase()}`, b);
+    if (b.uuid) beaconCache.set(`uuid:${b.uuid}:${b.major || 0}:${b.minor || 0}`, b);
+  }
+  beaconCacheTime = now;
+  return beaconCache;
+}
+
+function isRegistered(deviceKey) {
+  return getRegisteredBeacons().has(deviceKey);
+}
+
+function lookupRegistered(deviceKey) {
+  return getRegisteredBeacons().get(deviceKey) || null;
+}
+
 /**
  * Get a unique key for a device.
- * Prefers UUID (for iBeacon tags) over MAC (for generic BLE).
  */
 function getDeviceKey(data) {
   if (data.uuid) {
@@ -52,23 +85,11 @@ function getDeviceKey(data) {
 }
 
 /**
- * Look up the registered name for a device
+ * Smooth RSSI using exponential moving average
  */
-function lookupName(data) {
-  const db = getDb();
-  const mac = (data.id || data.mac || '').toLowerCase();
-
-  if (data.uuid) {
-    const byUuid = db.prepare('SELECT name, role FROM beacons WHERE uuid = ?').get(data.uuid);
-    if (byUuid) return byUuid;
-  }
-
-  if (mac) {
-    const byMac = db.prepare('SELECT name, role FROM beacons WHERE mac = ?').get(mac);
-    if (byMac) return byMac;
-  }
-
-  return null;
+function smoothRssi(previous, current) {
+  if (previous === null || previous === undefined) return current;
+  return (1 - SMOOTHING_FACTOR) * previous + SMOOTHING_FACTOR * current;
 }
 
 /**
@@ -76,83 +97,123 @@ function lookupName(data) {
  */
 function processTheengsMessage(topicDeviceId, data) {
   const mac = (data.id || topicDeviceId || '').toLowerCase();
-  const rssi = data.rssi;
+  const rawRssi = data.rssi;
 
-  // Filter out weak signals
-  if (rssi && rssi < MIN_RSSI) return;
+  // Hard ignore: signal too weak to be meaningful
+  if (rawRssi !== undefined && rawRssi !== null && rawRssi < IGNORE_RSSI) return;
 
   const deviceKey = getDeviceKey(data);
-  const now = new Date();
-
+  const now = Date.now();
+  const nowDate = new Date(now);
   const db = getDb();
 
-  // Store raw scan
+  // --- Raw layer: store ALL detections (technical log) ---
   db.prepare(`
     INSERT INTO scan_events (gateway, mac, uuid, major, minor, rssi, txpower, distance, model, raw_data)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    'theengs-bridge',
-    mac,
-    data.uuid || null,
-    data.major || null,
-    data.minor || null,
-    rssi || null,
-    data.txpower || null,
-    data.distance || null,
+    'theengs-bridge', mac,
+    data.uuid || null, data.major || null, data.minor || null,
+    rawRssi || null, data.txpower || null, data.distance || null,
     data.model_id || data.model || 'unknown',
     JSON.stringify(data)
   );
 
-  // Lookup registered name
-  const registered = lookupName(data);
+  // --- Presence layer: only for registered beacons ---
+  const registered = lookupRegistered(deviceKey);
+  if (!registered) return; // Ignore unregistered devices for presence logic
 
-  // Update presence state
-  const prev = presenceState.get(deviceKey);
-  const wasPresent = prev ? prev.present : false;
+  // Get or create state
+  let state = presenceState.get(deviceKey);
+  if (!state) {
+    state = {
+      mac,
+      uuid: data.uuid || '',
+      major: data.major || 0,
+      minor: data.minor || 0,
+      name: registered.name,
+      role: registered.role,
+      smoothedRssi: rawRssi,
+      rawRssi,
+      txpower: data.txpower || null,
+      distance: data.distance || null,
+      model: data.model_id || data.model || 'unknown',
+      brand: data.brand || '',
+      present: false,
+      lastSeen: now,
+      recentHits: [],
+      deviceKey
+    };
+  }
 
-  presenceState.set(deviceKey, {
-    lastSeen: now,
-    mac,
-    uuid: data.uuid || (prev ? prev.uuid : ''),
-    major: data.major || 0,
-    minor: data.minor || 0,
-    rssi: rssi || -100,
-    txpower: data.txpower || null,
-    distance: data.distance || null,
-    model: data.model_id || data.model || 'unknown',
-    brand: data.brand || '',
-    name: registered ? registered.name : (prev ? prev.name : ''),
-    role: registered ? registered.role : (prev ? prev.role : ''),
-    present: true,
-    deviceKey
-  });
+  // Update smoothed RSSI
+  state.smoothedRssi = smoothRssi(state.smoothedRssi, rawRssi);
+  state.rawRssi = rawRssi;
+  state.lastSeen = now;
+  state.txpower = data.txpower || state.txpower;
+  state.distance = data.distance || state.distance;
+  state.name = registered.name;
+  state.role = registered.role;
 
-  // Emit "enter" event if newly detected
-  if (!wasPresent) {
-    const displayName = registered ? registered.name : mac;
+  // Track recent valid hits (RSSI above enter threshold) within the window
+  if (state.smoothedRssi >= ENTER_RSSI) {
+    state.recentHits.push({ ts: now, rssi: state.smoothedRssi });
+  }
+  // Prune hits outside the enter window
+  state.recentHits = state.recentHits.filter(h => (now - h.ts) <= ENTER_WINDOW_MS);
 
-    db.prepare(
-      'INSERT INTO presence_events (mac, uuid, event, rssi, distance) VALUES (?, ?, ?, ?, ?)'
-    ).run(mac, data.uuid || null, 'enter', rssi, data.distance || null);
+  // --- ENTER logic ---
+  if (!state.present) {
+    let shouldEnter = false;
 
-    if (onPresenceChange) {
-      onPresenceChange({
-        event: 'enter',
-        mac,
-        uuid: data.uuid || '',
-        name: displayName,
-        role: registered ? registered.role : '',
-        rssi,
-        distance: data.distance || null,
-        model: data.model_id || data.model || 'unknown',
-        timestamp: now.toISOString()
-      });
+    // Rule 1: strong single reading
+    if (state.smoothedRssi >= STRONG_ENTER_RSSI) {
+      shouldEnter = true;
+    }
+
+    // Rule 2: multiple valid readings within the window
+    if (state.recentHits.length >= ENTER_MIN_HITS) {
+      shouldEnter = true;
+    }
+
+    if (shouldEnter) {
+      state.present = true;
+      state.recentHits = [];
+
+      db.prepare(
+        'INSERT INTO presence_events (mac, uuid, event, rssi, distance) VALUES (?, ?, ?, ?, ?)'
+      ).run(mac, data.uuid || null, 'enter', Math.round(state.smoothedRssi), state.distance);
+
+      if (onPresenceChange) {
+        onPresenceChange({
+          event: 'enter',
+          mac,
+          uuid: data.uuid || '',
+          name: state.name,
+          role: state.role,
+          rssi: Math.round(state.smoothedRssi),
+          distance: state.distance,
+          model: state.model,
+          timestamp: nowDate.toISOString()
+        });
+      }
     }
   }
+
+  // --- While present: check hysteresis exit on weak signal ---
+  // (actual timeout exit is handled by checkAbsence)
+  // If smoothed RSSI drops below exit threshold, don't immediately exit
+  // but stop resetting the "last valid" timer — let the timeout handle it
+  if (state.present && state.smoothedRssi >= EXIT_RSSI) {
+    state.lastValidSignal = now;
+  }
+
+  presenceState.set(deviceKey, state);
 }
 
 /**
- * Check for devices that have gone absent
+ * Check for devices that should exit.
+ * Uses hysteresis: exit when no valid signal (above EXIT_RSSI) for EXIT_TIMEOUT_MS.
  */
 function checkAbsence() {
   const db = getDb();
@@ -161,14 +222,17 @@ function checkAbsence() {
   for (const [deviceKey, state] of presenceState.entries()) {
     if (!state.present) continue;
 
-    const elapsed = (now - state.lastSeen.getTime()) / 1000;
-    if (elapsed > ABSENCE_TIMEOUT_SEC) {
+    const lastValid = state.lastValidSignal || state.lastSeen;
+    const elapsed = now - lastValid;
+
+    if (elapsed >= EXIT_TIMEOUT_MS) {
       state.present = false;
+      state.recentHits = [];
       presenceState.set(deviceKey, state);
 
       db.prepare(
         'INSERT INTO presence_events (mac, uuid, event, rssi, distance) VALUES (?, ?, ?, ?, ?)'
-      ).run(state.mac, state.uuid || null, 'exit', state.rssi, state.distance);
+      ).run(state.mac, state.uuid || null, 'exit', Math.round(state.smoothedRssi), state.distance);
 
       if (onPresenceChange) {
         onPresenceChange({
@@ -177,7 +241,7 @@ function checkAbsence() {
           uuid: state.uuid || '',
           name: state.name,
           role: state.role,
-          rssi: state.rssi,
+          rssi: Math.round(state.smoothedRssi),
           distance: state.distance,
           model: state.model,
           timestamp: new Date().toISOString()
@@ -188,7 +252,7 @@ function checkAbsence() {
 }
 
 /**
- * Get current presence snapshot
+ * Get current presence snapshot — registered beacons only
  */
 function getPresenceSnapshot() {
   const result = [];
@@ -201,13 +265,14 @@ function getPresenceSnapshot() {
       minor: state.minor,
       name: state.name,
       role: state.role,
-      rssi: state.rssi,
+      rssi: Math.round(state.smoothedRssi),
+      rawRssi: state.rawRssi,
       txpower: state.txpower,
       distance: state.distance,
       model: state.model,
       brand: state.brand,
       present: state.present,
-      lastSeen: state.lastSeen.toISOString()
+      lastSeen: new Date(state.lastSeen).toISOString()
     });
   }
   return result.sort((a, b) => (a.present === b.present ? 0 : a.present ? -1 : 1));

@@ -192,8 +192,8 @@ mqttClient.on('error', (err) => {
   console.error('[MQTT] Error:', err.message);
 });
 
-// --- Absence checker (every 10 seconds) ---
-setInterval(checkAbsence, 10000);
+// --- Absence checker (every 5 seconds for responsive exit detection) ---
+setInterval(checkAbsence, 5000);
 
 // ============================================================
 // REST API
@@ -278,6 +278,37 @@ app.get('/api/scans/:id', (req, res) => {
     LIMIT ?
   `).all(id, id, limit);
   res.json(scans);
+});
+
+// Presence engine configuration (read-only)
+app.get('/api/config', (req, res) => {
+  res.json({
+    ENTER_RSSI: process.env.ENTER_RSSI || '-75',
+    STRONG_ENTER_RSSI: process.env.STRONG_ENTER_RSSI || '-68',
+    EXIT_RSSI: process.env.EXIT_RSSI || '-82',
+    IGNORE_RSSI: process.env.IGNORE_RSSI || '-85',
+    EXIT_TIMEOUT_MS: process.env.EXIT_TIMEOUT_MS || '20000',
+    ENTER_WINDOW_MS: process.env.ENTER_WINDOW_MS || '8000',
+    ENTER_MIN_HITS: process.env.ENTER_MIN_HITS || '2',
+    SMOOTHING_FACTOR: process.env.SMOOTHING_FACTOR || '0.4'
+  });
+});
+
+// Raw scan stats (how many total BLE devices seen vs registered)
+app.get('/api/stats', (req, res) => {
+  const db = getDb();
+  const totalScans = db.prepare('SELECT COUNT(*) as count FROM scan_events').get();
+  const uniqueDevices = db.prepare('SELECT COUNT(DISTINCT mac) as count FROM scan_events').get();
+  const registeredCount = db.prepare('SELECT COUNT(*) as count FROM beacons').get();
+  const last5min = db.prepare(
+    "SELECT COUNT(DISTINCT mac) as count FROM scan_events WHERE timestamp > datetime('now', '-5 minutes')"
+  ).get();
+  res.json({
+    totalScans: totalScans.count,
+    uniqueDevices: uniqueDevices.count,
+    registeredBeacons: registeredCount.count,
+    activeDevicesLast5min: last5min.count
+  });
 });
 
 // Health check
