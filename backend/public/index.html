@@ -716,7 +716,10 @@
       const name = document.getElementById('regName').value.trim();
       const role = document.getElementById('regRole').value;
 
-      if (!mac || !name) return alert('MAC and Name are required');
+      if (!mac) { document.getElementById('regMac').style.borderColor = 'var(--red)'; return; }
+      if (!name) { document.getElementById('regName').style.borderColor = 'var(--red)'; return; }
+      document.getElementById('regMac').style.borderColor = '';
+      document.getElementById('regName').style.borderColor = '';
 
       const res = await fetch(`${API_BASE}/api/beacons`, {
         method: 'POST',
