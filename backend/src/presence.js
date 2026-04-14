@@ -71,22 +71,26 @@ function getRegisteredBeacons() {
 }
 
 /**
- * Look up registered beacon by trying multiple key strategies
+ * Look up registered beacon by trying multiple key strategies.
+ * IMPORTANT: Always returns MAC-based key when registered by MAC,
+ * even if the beacon also broadcasts UUID. This prevents dual-key
+ * flapping when Feasycom beacons alternate between iBeacon and
+ * generic BLE advertisements.
  */
 function lookupRegistered(mac, data) {
   const beacons = getRegisteredBeacons();
 
-  // Try UUID key first (most specific for iBeacon)
+  // Try MAC first — this is the primary identifier for our registered beacons
+  const macKey = `mac:${mac}`;
+  const byMac = beacons.get(macKey);
+  if (byMac) return { beacon: byMac, key: macKey };
+
+  // Fall back to UUID key (for beacons registered by UUID)
   if (data.uuid) {
     const uuidKey = `uuid:${data.uuid.toLowerCase()}:${data.major || 0}:${data.minor || 0}`;
     const byUuid = beacons.get(uuidKey);
     if (byUuid) return { beacon: byUuid, key: uuidKey };
   }
-
-  // Try normalized MAC
-  const macKey = `mac:${mac}`;
-  const byMac = beacons.get(macKey);
-  if (byMac) return { beacon: byMac, key: macKey };
 
   return null;
 }

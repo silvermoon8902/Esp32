@@ -758,17 +758,26 @@
     }
 
     // --- Helpers ---
+    const TZ = 'America/New_York'; // EST/EDT
+
+    function parseTimestamp(isoStr) {
+      // DB timestamps like "2026-04-14 00:54:12" are UTC — append Z if missing
+      if (isoStr && !isoStr.endsWith('Z') && !isoStr.includes('+') && !isoStr.includes('T')) {
+        return new Date(isoStr.replace(' ', 'T') + 'Z');
+      }
+      return new Date(isoStr);
+    }
+
     function formatTime(isoStr) {
       if (!isoStr) return '—';
-      const d = new Date(isoStr);
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      return parseTimestamp(isoStr).toLocaleTimeString('en-US', { timeZone: TZ, hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
 
     function formatDateTime(isoStr) {
       if (!isoStr) return '—';
-      const d = new Date(isoStr);
-      return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
-             d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const d = parseTimestamp(isoStr);
+      return d.toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' }) + ' ' +
+             d.toLocaleTimeString('en-US', { timeZone: TZ, hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
 
     function formatUptime(s) {
